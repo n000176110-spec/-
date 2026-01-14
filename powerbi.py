@@ -1,0 +1,74 @@
+import requests
+import pandas as pd
+from datetime import datetime, timedelta
+
+# API 設定
+BASE_URL = "http://10.110.59.126/iEMWebAPI"
+# 收集至今日起前一週所有預警資訊
+start_time = (datetime.now() - timedelta(days=7)).strftime("%Y/%m/%d %H:%M:%S")
+
+all_records = []
+
+try:
+    # 1. 抓取預警清單
+    list_url = f"{BASE_URL}/IEMeWarnings"
+    params = {"startTime": start_time, "maxCount": 1000}
+    response = requests.get(list_url, params=params, timeout=10)
+    warnings = response.json()
+
+    for warn in warnings:
+        uid = warn.get("UID")
+        # 2. 抓取詳情
+        detail_resp = requests.get(f"{BASE_URL}/IEMeWarnings/{uid}/Details", timeout=10)
+        if detail_resp.status_code == 200:
+            detail = detail_resp.json()
+            
+            # --- 核心邏輯：拆分事業部、廠別、設備名稱 ---
+            # 假設路徑格式為: AHM.事業部.生產廠.設備名稱
+            path = detail.get("AssetPath", "")
+            parts = path.split('.')
+            
+            dept = parts[1] if len(parts) > 1 else "未知事業部"
+            factory = parts[2] if len(parts) > 2 else "未知廠別"
+            asset_name = parts[-1] if len(parts) > 0 else "未知設備"
+            
+            # --- 日期時間拆分 ---
+            raw_ts = detail.get("StartTime", "")
+            try:
+                dt_obj = datetime.strptime(raw_ts, "%Y/%m/%d %H:%M:%S")
+                date_str = dt_obj.strftime("%Y/%m/%d")
+                time_str = dt_obj.strftime("%H:%M:%S")
+            except:
+                date_str, time_str = (raw_ts.split(' ') if ' ' in raw_ts else (raw_ts, ""))
+
+            # 處理三大關聯點 (含實測值)
+            relevants = detail.get("Relevants", [])
+            tags = " | ".join([f"{r.get('TagDes')}({r.get('TagVal')}{r.get('TagUnit')})" for r in relevants[:3]])
+            
+            # 處理關聯規則
+            rules = " | ".join([r.get('RuleName', '') for r in detail.get('Rules', [])])
+            
+            all_records.append({
+                "預警日期": date_str,
+                "預警時間": time_str,
+                "事業部": dept,
+                "生產廠": factory,
+                "設備名稱": asset_name,
+                "設備編號": detail.get("AssetID"),
+                "實測健康度": detail.get("AssetHPI"),
+                "健康度基準值": detail.get("AssetHPIThr"),
+                "三大關聯點": tags,
+                "關聯規則": rules,
+                "層級": detail.get("EWLevel"),
+                "原始時間戳": raw_ts
+            })
+
+except Exception as e:
+    print(f"Error: {e}")
+
+# 最終輸出的資料表
+dataset = pd.DataFrame(all_records)
+
+# 如果沒資料，建立空結構避免 Power BI 報錯
+if dataset.empty:
+    dataset = pd.DataFrame(columns=["預警日期", "預警時間", "事業部", "生產廠", "設備名稱", "設備編號", "實測健康度", "健康度基準值", "三大關聯點", "關聯規則", "層級"])
