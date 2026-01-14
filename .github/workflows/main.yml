@@ -19,4 +19,5 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
     - name: 執行 Python 程式
-      run: python code.py  # 假設你的檔名是 code.py
+      run: python code.py# 假設你的檔名是 code.py
+      dataset.to_csv("report.csv", index=False)
